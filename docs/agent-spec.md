@@ -18,6 +18,7 @@
 6. 사실, 추론, 제안을 구분해서 표현한다
 7. 선제 개입은 제한적이고 우선순위 기반이어야 한다
 8. MVP에서는 외부 시스템 쓰기 동작을 하지 않는다
+9. 개인 업무 사실은 Notion DB를 우선하며, shared memory의 개인 업무 정보는 요약/참조/캐시로만 다룬다
 
 ---
 
@@ -147,13 +148,14 @@
 
 ### 주된 목적
 
-사용자의 개인 일정, 개인 업무 흐름, 회의 준비, 주의 관리(attention)를 지원한다.
+사용자의 개인 일정, **Notion DB 기반 개인 업무 흐름**, 회의 준비, 주의 관리(attention)를 지원한다.
 
 ### 핵심 책임
 
 * Google Calendar 일정 조회 및 요약
 * 주목할 만한 Slack 멘션/신호 노출
-* Notion 기반 개인 업무 조회 및 정리
+* Notion DB 기반 개인 업무 조회 및 정리
+* Notion row/page 본문을 포함한 업무 맥락 해석
 * 지금/다음/나중에 무엇을 할지 정리
 * 회의 전 준비 브리핑
 * 회의 후 액션아이템 정리
@@ -169,7 +171,8 @@
 ### 선호 데이터 소스
 
 * Google Calendar
-* Notion
+* Notion DB (개인 업무 source of truth)
+* personal task summary/reference cache (shared memory, 보조 계층)
 * Slack mentions / attention signals
 * 필요 시 project summary context
 * 현재 실행과 관련 있을 때만 service context
@@ -201,6 +204,19 @@
 * 팀 전체 전달 상황의 최종 사실
 * 독자적인 전략 우선순위 판단
 * 제품 방향성 판단
+* Notion DB 스키마를 벗어난 임의 개인 업무 필드의 사실 확정
+
+### 개인 업무 데이터 주의사항 (MVP)
+
+개인 비서 Agent는 개인 업무 원본을 Notion DB로 간주하며, 아래 속성만 사실 필드로 취급합니다.
+
+* 제목 (string)
+* 상태 (`not started`, `in progress`, `done`)
+* 생성일
+* 마감일 (nullable)
+* 마지막 수정일
+
+또한 Notion DB의 각 row는 하나의 page이며, 업무 상세 내용은 해당 page body에서 읽어옵니다.
 
 ---
 

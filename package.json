@@ -1,0 +1,8 @@
+{
+  "name": "ai-pm",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo:orchestrator": "node apps/orchestrator/src/demo-runner.ts"
+  }
+}
