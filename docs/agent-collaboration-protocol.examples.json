@@ -1,0 +1,153 @@
+﻿{
+  "examplePairs": [
+    {
+      "name": "Pair 1 - feasibility_check",
+      "request": {
+        "kind": "request",
+        "messageId": "msg_req_20260302_0001",
+        "correlationId": "corr_20260302_featureA",
+        "fromAgent": "service_planning_agent",
+        "toAgent": "product_operations_agent",
+        "messageType": "feasibility_check",
+        "createdAt": "2026-03-02T08:00:00Z",
+        "confidence": "likely",
+        "requiresUserEscalation": false,
+        "payload": {
+          "objective": "2주 내 온보딩 템플릿 추천 기능 착수 가능성 확인",
+          "questions": [
+            "현재 스프린트 기준으로 착수 슬롯이 있는가?",
+            "임박 마감과 충돌하는 blocker가 있는가?"
+          ],
+          "constraints": [
+            "쓰기 동작 없이 읽기 데이터만 사용",
+            "근거는 Asana와 Slack 중심"
+          ],
+          "contextRefs": [
+            "idea:onboarding-template-reco",
+            "project_summary:week10"
+          ],
+          "priority": "high",
+          "deadlineAt": "2026-03-02T08:05:00Z"
+        }
+      },
+      "response": {
+        "kind": "response",
+        "messageId": "msg_res_20260302_0001",
+        "correlationId": "corr_20260302_featureA",
+        "requestMessageId": "msg_req_20260302_0001",
+        "fromAgent": "product_operations_agent",
+        "toAgent": "service_planning_agent",
+        "messageType": "feasibility_check",
+        "createdAt": "2026-03-02T08:01:40Z",
+        "confidence": "likely",
+        "requiresUserEscalation": false,
+        "status": "partial_success",
+        "payload": {
+          "summary": "이번 주 후반부터 조건부 착수 가능하지만 결제 모듈 hotfix 일정이 변수입니다.",
+          "findings": [
+            {
+              "label": "Capacity",
+              "detail": "3월 5일 이후 백엔드 슬롯 1개 확보 가능",
+              "severity": "medium"
+            },
+            {
+              "label": "Risk",
+              "detail": "결제 hotfix가 2일 이상 지연되면 착수 창구가 사라짐",
+              "severity": "high"
+            }
+          ],
+          "recommendedNextSteps": [
+            "3월 4일 오전에 blocker 상태 재확인",
+            "초기 범위를 read-only 분석 기능으로 제한해 착수 리스크 낮추기"
+          ],
+          "evidenceRefs": [
+            {
+              "source": "asana",
+              "reference": "project:Growth-App/tasks?filter=due_this_week"
+            },
+            {
+              "source": "slack",
+              "reference": "channel:#ops-alerts/thread:18493"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Pair 2 - user_attention_check",
+      "request": {
+        "kind": "request",
+        "messageId": "msg_req_20260302_0101",
+        "correlationId": "corr_20260302_daily_briefing",
+        "fromAgent": "product_operations_agent",
+        "toAgent": "personal_assistant_agent",
+        "messageType": "user_attention_check",
+        "createdAt": "2026-03-02T11:55:00Z",
+        "confidence": "confirmed",
+        "requiresUserEscalation": false,
+        "payload": {
+          "objective": "오늘 정오 브리핑에서 사용자가 즉시 확인해야 할 항목 선별",
+          "questions": [
+            "사용자가 14시 이전 검토 가능한 20분 슬롯이 있는가?",
+            "회의 전 반드시 읽어야 할 멘션이 있는가?"
+          ],
+          "contextRefs": [
+            "project_summary:week10",
+            "risk_snapshot:2026-03-02-noon"
+          ],
+          "priority": "urgent"
+        }
+      },
+      "response": {
+        "kind": "response",
+        "messageId": "msg_res_20260302_0101",
+        "correlationId": "corr_20260302_daily_briefing",
+        "requestMessageId": "msg_req_20260302_0101",
+        "fromAgent": "personal_assistant_agent",
+        "toAgent": "product_operations_agent",
+        "messageType": "user_attention_check",
+        "createdAt": "2026-03-02T11:55:20Z",
+        "confidence": "tentative",
+        "requiresUserEscalation": true,
+        "escalationReason": "missing_preference",
+        "status": "needs_user_input",
+        "payload": {
+          "summary": "13:20-13:40 슬롯은 있으나, 긴급 멘션 알림 선호(소리/무음)가 없어 표시 방식 결정이 필요합니다.",
+          "findings": [
+            {
+              "label": "Available Slot",
+              "detail": "13:20~13:40에 일정 공백 확인",
+              "severity": "low"
+            },
+            {
+              "label": "Preference Gap",
+              "detail": "긴급 멘션 알림 채널 선호 미정",
+              "severity": "medium"
+            }
+          ],
+          "recommendedNextSteps": [
+            "사용자에게 긴급 알림 채널 선호를 확인",
+            "확정 전에는 인앱 informational 배지로만 노출"
+          ],
+          "evidenceRefs": [
+            {
+              "source": "calendar",
+              "reference": "calendar:primary/date:2026-03-02"
+            },
+            {
+              "source": "shared_memory",
+              "reference": "important_context_notes:notification_preferences"
+            }
+          ]
+        },
+        "errors": [
+          {
+            "code": "PREFERENCE_NOT_FOUND",
+            "message": "긴급 멘션 알림 선호 정보가 메모리에 없습니다.",
+            "retriable": true
+          }
+        ]
+      }
+    }
+  ]
+}

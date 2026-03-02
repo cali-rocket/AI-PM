@@ -1,0 +1,385 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-pm.local/schemas/agent-collaboration-protocol.schema.json",
+  "title": "Agent Collaboration Protocol",
+  "description": "Contract-first schema for structured request/response messages exchanged between agents.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RequestMessage"
+    },
+    {
+      "$ref": "#/$defs/ResponseMessage"
+    }
+  ],
+  "$defs": {
+    "AgentId": {
+      "type": "string",
+      "description": "Canonical agent identifier. Keep enum stable for type-safe routing.",
+      "enum": [
+        "service_planning_agent",
+        "product_operations_agent",
+        "personal_assistant_agent",
+        "orchestrator"
+      ]
+    },
+    "MessageType": {
+      "type": "string",
+      "description": "Purpose of collaboration request/response.",
+      "enum": [
+        "info_request",
+        "feasibility_check",
+        "schedule_check",
+        "priority_review",
+        "context_summary_request",
+        "risk_check",
+        "user_attention_check",
+        "escalation_to_user"
+      ]
+    },
+    "ConfidenceLevel": {
+      "type": "string",
+      "description": "Confidence level defined in agent-spec.",
+      "enum": [
+        "confirmed",
+        "likely",
+        "tentative",
+        "needs_review"
+      ]
+    },
+    "PriorityLevel": {
+      "type": "string",
+      "description": "Execution priority for queueing and interruption policies.",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "urgent"
+      ]
+    },
+    "EscalationReason": {
+      "type": "string",
+      "description": "Why escalation to user is required.",
+      "enum": [
+        "info_conflict",
+        "missing_preference",
+        "unresolved_uncertainty",
+        "high_risk_action",
+        "other"
+      ]
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "description": "Reference to source evidence (tool or memory) used in reasoning.",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "reference"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Logical source system name such as asana, slack, notion, calendar, web_search, shared_memory."
+        },
+        "reference": {
+          "type": "string",
+          "description": "Source-local identifier, URL, or memory key."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional short note clarifying why this evidence matters."
+        }
+      }
+    },
+    "CommonFields": {
+      "type": "object",
+      "description": "Fields shared by request and response messages.",
+      "additionalProperties": false,
+      "required": [
+        "messageId",
+        "correlationId",
+        "fromAgent",
+        "toAgent",
+        "messageType",
+        "createdAt",
+        "confidence",
+        "requiresUserEscalation"
+      ],
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "description": "Unique message identifier. UUID format recommended.",
+          "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+        },
+        "correlationId": {
+          "type": "string",
+          "description": "Identifier shared across related messages in one collaboration chain.",
+          "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+        },
+        "fromAgent": {
+          "$ref": "#/$defs/AgentId",
+          "description": "Sender agent id."
+        },
+        "toAgent": {
+          "$ref": "#/$defs/AgentId",
+          "description": "Receiver agent id."
+        },
+        "messageType": {
+          "$ref": "#/$defs/MessageType",
+          "description": "Business intent type for this collaboration exchange."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Message creation timestamp in ISO 8601 UTC format."
+        },
+        "confidence": {
+          "$ref": "#/$defs/ConfidenceLevel",
+          "description": "Sender confidence about message completeness/correctness."
+        },
+        "requiresUserEscalation": {
+          "type": "boolean",
+          "description": "Whether the receiving flow should escalate to the user before proceeding."
+        },
+        "escalationReason": {
+          "$ref": "#/$defs/EscalationReason",
+          "description": "Reason code when requiresUserEscalation is true."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "requiresUserEscalation": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "escalationReason"
+            ]
+          }
+        }
+      ]
+    },
+    "RequestPayload": {
+      "type": "object",
+      "description": "Type-agnostic request payload. Keep this contract stable and evolve with additive fields.",
+      "additionalProperties": false,
+      "required": [
+        "objective"
+      ],
+      "properties": {
+        "objective": {
+          "type": "string",
+          "description": "Single-sentence statement of what the sender needs from the receiver."
+        },
+        "questions": {
+          "type": "array",
+          "description": "Optional concrete questions receiver should answer.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "description": "Optional constraints such as deadline, scope, or allowed sources.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "contextRefs": {
+          "type": "array",
+          "description": "Context pointers (memory keys, conversation turn ids, document ids).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "description": "Optional evidence already collected by sender.",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        },
+        "deadlineAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional response deadline timestamp."
+        },
+        "priority": {
+          "$ref": "#/$defs/PriorityLevel",
+          "description": "Queue priority requested by sender."
+        }
+      }
+    },
+    "ResponsePayload": {
+      "type": "object",
+      "description": "Type-agnostic response payload optimized for downstream rendering.",
+      "additionalProperties": false,
+      "required": [
+        "summary"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Concise natural-language answer to the request objective."
+        },
+        "findings": {
+          "type": "array",
+          "description": "Structured findings relevant to requested messageType.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "detail"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "description": "Short finding label for UI display."
+              },
+              "detail": {
+                "type": "string",
+                "description": "Expanded explanation of the finding."
+              },
+              "severity": {
+                "type": "string",
+                "description": "Optional severity hint.",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              }
+            }
+          }
+        },
+        "recommendedNextSteps": {
+          "type": "array",
+          "description": "Non-executed recommendations for user/agent follow-up.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "description": "Evidence used to produce the response.",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          }
+        }
+      }
+    },
+    "RequestMessage": {
+      "type": "object",
+      "description": "Agent-to-agent collaboration request message.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/CommonFields"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "request",
+              "description": "Message envelope role. Discriminator friendly for TypeScript unions."
+            },
+            "payload": {
+              "$ref": "#/$defs/RequestPayload",
+              "description": "Request-specific contract payload."
+            }
+          }
+        }
+      ]
+    },
+    "ResponseStatus": {
+      "type": "string",
+      "description": "Outcome status of handling the related request.",
+      "enum": [
+        "success",
+        "partial_success",
+        "failure",
+        "needs_user_input"
+      ]
+    },
+    "ErrorItem": {
+      "type": "object",
+      "description": "Structured error details when response status is failure/partial.",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retriable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Stable machine-readable error code."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable error explanation."
+        },
+        "retriable": {
+          "type": "boolean",
+          "description": "Whether sender can retry safely under same parameters."
+        }
+      }
+    },
+    "ResponseMessage": {
+      "type": "object",
+      "description": "Agent-to-agent collaboration response message.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/CommonFields"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "requestMessageId",
+            "status",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "response",
+              "description": "Message envelope role. Discriminator friendly for TypeScript unions."
+            },
+            "requestMessageId": {
+              "type": "string",
+              "description": "messageId of the request this response is answering.",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+            },
+            "status": {
+              "$ref": "#/$defs/ResponseStatus",
+              "description": "Execution outcome of the handled request."
+            },
+            "payload": {
+              "$ref": "#/$defs/ResponsePayload",
+              "description": "Response-specific contract payload."
+            },
+            "errors": {
+              "type": "array",
+              "description": "Optional error list when status is partial_success/failure.",
+              "items": {
+                "$ref": "#/$defs/ErrorItem"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
