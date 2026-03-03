@@ -1,22 +1,27 @@
 /**
- * Responsibility: minimal local demo runner for orchestrator -> Personal Assistant end-to-end flow.
- * No external API calls are used. Notion source-of-truth is mocked through in-memory reader data.
+ * Responsibility: minimal local demo runner for orchestrator -> Personal Assistant flow.
+ * Supports mock and real MCP reader selection while keeping one-final-speaker flow unchanged.
  */
 
 import { MockPersonalAssistantAgent } from "../../../packages/agents/src/personal-assistant-agent.ts";
 import { InMemorySharedMemoryStore } from "../../../packages/shared-memory/src/in-memory-store.ts";
+import { GptMcpNotionTasksReader } from "../../../packages/tool-connectors/src/gpt-mcp-notion-tasks-reader.ts";
+import { McpNotionTasksReader } from "../../../packages/tool-connectors/src/mcp-notion-tasks-reader.ts";
 import { MockNotionTasksReader } from "../../../packages/tool-connectors/src/mock-notion-tasks-reader.ts";
+import { OpenAiMcpPersonalTasksClient } from "../../../packages/tool-connectors/src/openai-mcp-personal-tasks-client.ts";
+import type { NotionTasksReader } from "../../../packages/tool-connectors/src/notion-tasks-reader.ts";
+import { loadOrchestratorRuntimeConfig } from "./config.ts";
 import { MockOrchestrator } from "./orchestrator.ts";
 import type { AuditLogger, OrchestrationContext, UserRequest } from "./types";
 
-const DEMO_NOTION_DATABASE_ID = "notion-db-personal-tasks";
+const runtimeConfig = loadOrchestratorRuntimeConfig();
 
 const demoRequests: UserRequest[] = [
   {
     id: "req-demo-001",
     userId: "demo-user",
     conversationId: "conv-demo-001",
-    text: "진행 중인 업무 보여줘",
+    text: "Show me in-progress personal tasks.",
     requestedAt: new Date().toISOString(),
     targetAgent: "personal_assistant",
   },
@@ -24,7 +29,7 @@ const demoRequests: UserRequest[] = [
     id: "req-demo-002",
     userId: "demo-user",
     conversationId: "conv-demo-001",
-    text: "아직 시작하지 않은 업무 보여줘",
+    text: "What should I do today?",
     requestedAt: new Date().toISOString(),
     target: "desk",
   },
@@ -32,19 +37,17 @@ const demoRequests: UserRequest[] = [
     id: "req-demo-003",
     userId: "demo-user",
     conversationId: "conv-demo-001",
-    text: "특정 업무 상세 보여줘",
+    text: "Show task detail.",
     requestedAt: new Date().toISOString(),
     targetAgent: "personal_assistant",
     context: {
       notionPageId: "page-task-001",
-      notionDatabaseId: DEMO_NOTION_DATABASE_ID,
     },
   },
 ];
 
 const auditLogger: AuditLogger = {
   logOrchestration(event) {
-    // Minimal trace hook for local verification.
     console.log(
       `[audit] request=${event.requestId} primary=${event.selectedPrimaryAgent} sources=${event.usedSources.join(
         ","
@@ -54,13 +57,14 @@ const auditLogger: AuditLogger = {
 };
 
 async function runDemo(): Promise<void> {
-  const notionTasksReader = new MockNotionTasksReader();
+  const notionTasksReader = await createPersonalTasksReader();
   const sharedMemoryStore = new InMemorySharedMemoryStore({ seed: true });
   const personalAssistantAgent = new MockPersonalAssistantAgent();
   const orchestrator = new MockOrchestrator();
 
+  const now = new Date().toISOString();
   const context: OrchestrationContext = {
-    now: new Date().toISOString(),
+    now,
     availableAgents: [
       "service_planning_ideation",
       "product_operations",
@@ -71,21 +75,25 @@ async function runDemo(): Promise<void> {
     personalAssistantAgent,
     personalAssistantRuntimeContext: {
       notionTasksReader,
+      personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
       sharedMemoryStore,
-      now: new Date().toISOString(),
+      now,
     },
-    personalAssistantNotionDatabaseId: DEMO_NOTION_DATABASE_ID,
+    personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
     auditLogger,
   };
 
   console.log("=== PM Desk AI Demo Runner (Minimal E2E) ===");
+  console.log(
+    `[config] personalTasksReaderMode=${runtimeConfig.personalTasksReaderMode} databaseId=${runtimeConfig.personalTasksDatabaseId}`
+  );
   for (const request of demoRequests) {
     const response = await orchestrator.handleUserRequest(request, context);
     const referenced = response.trace?.referencedNotionPageIds ?? [];
 
     console.log("\n---");
-    console.log(`요청 요약: ${request.text}`);
-    console.log(`선택된 primary agent: ${response.primaryAgent}`);
+    console.log(`request: ${request.text}`);
+    console.log(`primaryAgent: ${response.primaryAgent}`);
     console.log(`summary: ${response.summary}`);
     console.log(`confidence: ${response.confidence}`);
     console.log(`usedSources: ${response.usedSources.join(", ")}`);
@@ -102,3 +110,67 @@ runDemo().catch((error: unknown) => {
   console.error("[demo-runner] failed:", error);
   process.exitCode = 1;
 });
+
+async function createPersonalTasksReader(): Promise<NotionTasksReader> {
+  if (runtimeConfig.personalTasksReaderMode === "gpt_mcp") {
+    try {
+      const llmClient = new OpenAiMcpPersonalTasksClient({
+        apiKey: runtimeConfig.openAiApiKey ?? "",
+        model: runtimeConfig.openAiModel ?? "",
+        baseUrl: runtimeConfig.openAiBaseUrl,
+        notionMcpServerUrl: runtimeConfig.notionMcpUrl,
+        notionMcpAccessToken: runtimeConfig.notionMcpAccessToken,
+      });
+      const gptReader = new GptMcpNotionTasksReader(
+        {
+          personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
+        },
+        {
+          llmMcpClient: llmClient,
+        }
+      );
+
+      await gptReader.listTasks({ limit: 1 });
+      console.log("[config] using gpt-mcp-notion-tasks-reader");
+      return gptReader;
+    } catch (error) {
+      console.warn(
+        `[config] GPT MCP reader initialization failed, falling back to mock reader: ${
+          (error as Error).message
+        }`
+      );
+    }
+  }
+
+  if (runtimeConfig.personalTasksReaderMode === "mcp") {
+    try {
+      const mcpReader = new McpNotionTasksReader(
+        {
+          personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
+        },
+        {
+          mcpClientConfig: {
+            serverUrl: runtimeConfig.notionMcpUrl,
+            accessToken: runtimeConfig.notionMcpAccessToken ?? "",
+          },
+        }
+      );
+
+      // Smoke-check MCP availability. If it fails, fallback to mock path.
+      await mcpReader.listTasks({ limit: 1 });
+      console.log("[config] using mcp-notion-tasks-reader");
+      return mcpReader;
+    } catch (error) {
+      console.warn(
+        `[config] MCP reader initialization failed, falling back to mock reader: ${
+          (error as Error).message
+        }`
+      );
+    }
+  }
+
+  console.log("[config] using mock-notion-tasks-reader");
+  return new MockNotionTasksReader({
+    personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
+  });
+}

@@ -95,7 +95,7 @@ export interface OrchestrationContext {
   // Personal Assistant minimum runtime wiring.
   personalAssistantAgent?: PersonalAssistantAgent;
   personalAssistantRuntimeContext?: PersonalAssistantRuntimeContext;
-  personalAssistantNotionDatabaseId?: string;
+  personalTasksDatabaseId: string;
 
   // Optional observability hook.
   auditLogger?: AuditLogger;

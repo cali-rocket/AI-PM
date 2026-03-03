@@ -46,7 +46,7 @@ export class MockOrchestrator implements Orchestrator {
     const plan = this.buildCollaborationPlan(request, selection, context);
 
     let summary =
-      "[Mock] 요청을 수신했지만 연결된 에이전트 런타임이 없어 기본 응답으로 반환합니다.";
+      "[Mock] Request received, but selected runtime is not wired yet so a fallback response is returned.";
     let confidence: ConfidenceLevel = "needs_review";
     let usedSources: Array<"notion" | "shared_memory" | "unknown"> = ["unknown"];
     let referencedNotionPageIds: string[] = [];
@@ -54,34 +54,43 @@ export class MockOrchestrator implements Orchestrator {
 
     if (selection.resolvedPrimaryAgent === "personal_assistant") {
       if (context.personalAssistantAgent && context.personalAssistantRuntimeContext) {
-        // Read-first path: Personal Assistant runtime reads Notion source-of-truth first.
-        const executionResult = await context.personalAssistantAgent.handleRequest(
-          {
-            requestId: request.id,
-            userId: request.userId,
-            notionDatabaseId: this.resolveNotionDatabaseId(request, context),
-            intent: this.resolvePersonalAssistantIntent(request.text),
-            notionPageId: this.tryGetNotionPageId(request.context),
-            userText: request.text,
-          },
-          context.personalAssistantRuntimeContext
-        );
+        const runtime = context.personalAssistantRuntimeContext;
+        const readerDatabaseId = runtime.notionTasksReader.personalTasksDatabaseId;
+        if (readerDatabaseId !== context.personalTasksDatabaseId) {
+          summary =
+            "[Mock] Personal Tasks databaseId mismatch between orchestrator config and Personal Tasks reader.";
+          confidence = "needs_review";
+          usedSources = ["unknown"];
+          traceNotes.push("Detected databaseId mismatch; skipped Personal Assistant execution.");
+        } else {
+          const executionResult = await context.personalAssistantAgent.handleRequest(
+            {
+              requestId: request.id,
+              userId: request.userId,
+              intent: this.resolvePersonalAssistantIntent(request),
+              notionPageId: this.tryGetNotionPageId(request.context),
+              userText: request.text,
+            },
+            runtime
+          );
 
-        summary = executionResult.summary;
-        confidence = executionResult.confidence;
-        usedSources = executionResult.usedSources;
-        referencedNotionPageIds = executionResult.referencedNotionPageIds;
-        traceNotes.push("Delegated execution to Personal Assistant runtime.");
+          summary = executionResult.summary;
+          confidence = executionResult.confidence;
+          usedSources = executionResult.usedSources;
+          referencedNotionPageIds = executionResult.referencedNotionPageIds;
+          traceNotes.push(
+            `Delegated execution to Personal Assistant runtime (databaseId=${context.personalTasksDatabaseId}).`
+          );
+        }
       } else {
-        summary =
-          "[Mock] personal_assistant로 라우팅되었지만 런타임 주입이 없어 실행하지 못했습니다.";
+        summary = "[Mock] Routed to personal_assistant but runtime dependencies are missing.";
         confidence = "needs_review";
         usedSources = ["unknown"];
         traceNotes.push("Personal Assistant runtime dependency is missing.");
       }
     } else {
       // TODO: Connect Service Planning/Product Operations runtime after PA flow stabilization.
-      summary = `[Mock] ${selection.resolvedPrimaryAgent} 연결은 아직 비활성화되어 있습니다.`;
+      summary = `[Mock] ${selection.resolvedPrimaryAgent} runtime is not wired yet.`;
       confidence = "tentative";
       usedSources = ["unknown"];
       traceNotes.push("Non-personal agents are not wired in this minimal flow.");
@@ -99,7 +108,6 @@ export class MockOrchestrator implements Orchestrator {
     });
 
     if (context.auditLogger) {
-      // TODO: Replace with richer audit schema when global AuditLogger contract is finalized.
       await context.auditLogger.logOrchestration({
         requestId: request.id,
         selectedPrimaryAgent: selection.resolvedPrimaryAgent,
@@ -117,7 +125,8 @@ export class MockOrchestrator implements Orchestrator {
     request: UserRequest,
     context: OrchestrationContext
   ): PrimaryAgentSelectionResult {
-    const explicitTarget = request.targetAgent ?? (request.target && request.target !== "desk" ? request.target : undefined);
+    const explicitTarget =
+      request.targetAgent ?? (request.target && request.target !== "desk" ? request.target : undefined);
     if (explicitTarget) {
       return {
         resolvedPrimaryAgent: explicitTarget,
@@ -127,23 +136,34 @@ export class MockOrchestrator implements Orchestrator {
       };
     }
 
-    const text = request.text.toLowerCase();
-    if (this.containsAny(text, ["오늘", "할 일", "개인 업무", "진행 중", "todo", "task", "my task"])) {
+    if (this.isPersonalTaskContext(request)) {
       return {
         resolvedPrimaryAgent: "personal_assistant",
         reason: "desk_intent",
         matchedIntent: "personal_execution",
-        notes: ["Matched minimal personal assistant intent keywords."],
+        notes: ["Matched personal task intent keywords for desk request routing."],
       };
     }
-    if (this.containsAny(text, ["idea", "아이디어", "전략", "서비스"])) {
+
+    const normalized = request.text.toLowerCase();
+    if (this.containsAny(normalized, ["idea", "ideation", "\uc544\uc774\ub514\uc5b4", "\uae30\ud68d", "\uc11c\ube44\uc2a4"])) {
       return {
         resolvedPrimaryAgent: "service_planning_ideation",
         reason: "desk_intent",
         matchedIntent: "service_ideation",
       };
     }
-    if (this.containsAny(text, ["리스크", "마감", "프로젝트", "blocker"])) {
+    if (
+      this.containsAny(normalized, [
+        "deadline",
+        "blocker",
+        "project",
+        "operations",
+        "\ub9c8\uac10",
+        "\ud504\ub85c\uc81d\ud2b8",
+        "\ub9ac\uc2a4\ud06c",
+      ])
+    ) {
       return {
         resolvedPrimaryAgent: "product_operations",
         reason: "desk_intent",
@@ -171,7 +191,7 @@ export class MockOrchestrator implements Orchestrator {
         tasks: [],
         notes: [
           "Minimal mode: no cross-agent collaboration for personal assistant path.",
-          "Personal assistant runtime handles Notion-first reads and optional shared-memory refs.",
+          "Personal Assistant handles Notion Personal Tasks reads first, shared-memory refs second.",
         ],
       };
     }
@@ -215,29 +235,59 @@ export class MockOrchestrator implements Orchestrator {
     };
   }
 
-  private resolvePersonalAssistantIntent(text: string): PersonalAssistantIntent {
-    const normalized = text.toLowerCase();
-    if (this.containsAny(normalized, ["진행 중", "in progress"])) {
+  private resolvePersonalAssistantIntent(request: UserRequest): PersonalAssistantIntent {
+    const normalized = request.text.toLowerCase();
+
+    if (this.tryGetNotionPageId(request.context)) {
+      return "get_task_detail";
+    }
+    if (
+      this.containsAny(normalized, [
+        "detail",
+        "body",
+        "page",
+        "\uc0c1\uc138",
+        "\ubcf8\ubb38",
+        "\ud398\uc774\uc9c0",
+      ])
+    ) {
+      return "get_task_detail";
+    }
+    if (this.containsAny(normalized, ["\uc9c4\ud589 \uc911", "in progress"])) {
       return "list_in_progress";
     }
-    if (this.containsAny(normalized, ["미시작", "아직 시작", "not started"])) {
+    if (this.containsAny(normalized, ["\ubbf8\uc2dc\uc791", "\uc2dc\uc791 \uc804", "not started"])) {
       return "list_not_started";
     }
-    if (this.containsAny(normalized, ["마감", "due"])) {
+    if (this.containsAny(normalized, ["\ub9c8\uac10", "due", "deadline"])) {
       return "list_with_due_date";
-    }
-    if (this.containsAny(normalized, ["상세", "본문", "detail", "body"])) {
-      return "get_task_detail";
     }
     return "build_daily_summary";
   }
 
-  private resolveNotionDatabaseId(request: UserRequest, context: OrchestrationContext): string {
-    const fromRequest = request.context?.notionDatabaseId;
-    if (typeof fromRequest === "string" && fromRequest.length > 0) {
-      return fromRequest;
+  private isPersonalTaskContext(request: UserRequest): boolean {
+    if (this.tryGetNotionPageId(request.context)) {
+      return true;
     }
-    return context.personalAssistantNotionDatabaseId ?? "notion-db-personal-tasks";
+
+    const normalized = request.text.toLowerCase();
+    return this.containsAny(normalized, [
+      "task",
+      "tasks",
+      "todo",
+      "to-do",
+      "my task",
+      "notion",
+      "personal task",
+      "\uac1c\uc778 \uc5c5\ubb34",
+      "\uc5c5\ubb34",
+      "\ud560\uc77c",
+      "\ud560 \uc77c",
+      "\uc624\ub298",
+      "\uc9c4\ud589 \uc911",
+      "\uc0c1\uc138",
+      "\ubcf8\ubb38",
+    ]);
   }
 
   private tryGetNotionPageId(context: UserRequest["context"]): string | undefined {

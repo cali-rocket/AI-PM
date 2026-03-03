@@ -1,10 +1,16 @@
 /**
- * Responsibility: in-memory mock Notion personal task reader for local development.
- * Source-of-truth semantics are preserved as read-only contracts.
+ * Responsibility: in-memory mock Personal Tasks Notion reader for local development.
+ * This implementation is read-only and scoped to one configured Personal Tasks database.
  */
 
 import type { NotionTasksReader } from "./notion-tasks-reader";
-import type { NotionTaskPageBody, NotionTaskQuery, NotionTaskRecord } from "./types";
+import type {
+  NotionTaskStatus,
+  NotionTaskPageBody,
+  NotionTaskQuery,
+  NotionTaskRecord,
+  PersonalTasksReaderConfig,
+} from "./types";
 
 const SAMPLE_NOTION_DATABASE_ID = "notion-db-personal-tasks";
 
@@ -12,7 +18,7 @@ const SAMPLE_TASKS: NotionTaskRecord[] = [
   {
     notionDatabaseId: SAMPLE_NOTION_DATABASE_ID,
     notionPageId: "page-task-001",
-    title: "온보딩 개편 회의 준비",
+    title: "Prepare onboarding revamp meeting",
     status: "in progress",
     createdAt: "2026-03-01T09:00:00.000Z",
     dueDate: "2026-03-03T09:00:00.000Z",
@@ -21,7 +27,7 @@ const SAMPLE_TASKS: NotionTaskRecord[] = [
   {
     notionDatabaseId: SAMPLE_NOTION_DATABASE_ID,
     notionPageId: "page-task-002",
-    title: "주간 운영 리스크 요약 확인",
+    title: "Review weekly ops risk summary",
     status: "not started",
     createdAt: "2026-03-01T12:30:00.000Z",
     dueDate: null,
@@ -30,7 +36,7 @@ const SAMPLE_TASKS: NotionTaskRecord[] = [
   {
     notionDatabaseId: SAMPLE_NOTION_DATABASE_ID,
     notionPageId: "page-task-003",
-    title: "지난 스프린트 회고 메모 정리",
+    title: "Organize sprint retrospective notes",
     status: "done",
     createdAt: "2026-02-27T03:20:00.000Z",
     dueDate: "2026-03-01T10:00:00.000Z",
@@ -41,28 +47,42 @@ const SAMPLE_TASKS: NotionTaskRecord[] = [
 const SAMPLE_PAGE_BODIES: NotionTaskPageBody[] = [
   {
     notionPageId: "page-task-001",
-    body: "회의 아젠다 3개 정리: KPI 영향, 리스크, 다음 액션.",
+    body: "Prepare three sections: KPI impact, key risks, and next actions.",
     lastEditedAt: "2026-03-02T01:15:00.000Z",
   },
   {
     notionPageId: "page-task-002",
-    body: "Asana blocker 2건 근거 확인 후 오전 브리핑에 반영.",
+    body: "Check two Asana blockers and reflect them in the briefing.",
     lastEditedAt: "2026-03-01T12:30:00.000Z",
   },
   {
     notionPageId: "page-task-003",
-    body: "회고에서 나온 개선안 2개를 문장으로 확정.",
+    body: "Finalize two process improvements from retrospective discussion.",
     lastEditedAt: "2026-03-01T11:40:00.000Z",
   },
 ];
 
 export class MockNotionTasksReader implements NotionTasksReader {
+  readonly personalTasksDatabaseId: string;
+  private readonly tasks: NotionTaskRecord[];
+
+  constructor(config?: PersonalTasksReaderConfig) {
+    this.personalTasksDatabaseId =
+      config?.personalTasksDatabaseId ?? SAMPLE_NOTION_DATABASE_ID;
+    this.tasks = SAMPLE_TASKS.map((task) => ({
+      ...task,
+      notionDatabaseId: this.personalTasksDatabaseId,
+    }));
+  }
+
   async listTasks(query: NotionTaskQuery): Promise<NotionTaskRecord[]> {
-    let rows = SAMPLE_TASKS.filter((task) => task.notionDatabaseId === query.notionDatabaseId);
+    // Personal Tasks dedicated path: never reads outside configured database id.
+    let rows = this.tasks.filter(
+      (task) => task.notionDatabaseId === this.personalTasksDatabaseId
+    );
 
     if (query.statuses && query.statuses.length > 0) {
-      const statuses = query.statuses;
-      rows = rows.filter((task) => statuses.includes(task.status));
+      rows = rows.filter((task) => query.statuses?.includes(task.status));
     }
 
     if (query.includeDone === false) {
@@ -97,11 +117,29 @@ export class MockNotionTasksReader implements NotionTasksReader {
     return rows;
   }
 
+  async listTasksByStatus(
+    status: NotionTaskStatus,
+    query?: Omit<NotionTaskQuery, "statuses">
+  ): Promise<NotionTaskRecord[]> {
+    return this.listTasks({
+      ...query,
+      statuses: [status],
+    });
+  }
+
   async getTaskByPageId(notionPageId: string): Promise<NotionTaskRecord | null> {
-    return SAMPLE_TASKS.find((task) => task.notionPageId === notionPageId) ?? null;
+    const task = this.tasks.find((entry) => entry.notionPageId === notionPageId);
+    if (!task || task.notionDatabaseId !== this.personalTasksDatabaseId) {
+      return null;
+    }
+    return task;
   }
 
   async getTaskPageBody(notionPageId: string): Promise<NotionTaskPageBody | null> {
+    const task = await this.getTaskByPageId(notionPageId);
+    if (!task) {
+      return null;
+    }
     return SAMPLE_PAGE_BODIES.find((entry) => entry.notionPageId === notionPageId) ?? null;
   }
 }

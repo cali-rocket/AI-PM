@@ -162,6 +162,14 @@ Notion DB 속성은 아래만 사용합니다.
 * 업무 상세 내용은 해당 page body에 존재
 * 우선순위/태그/추가 속성/본문 템플릿은 MVP에서 도입하지 않음
 
+런타임 연결 경로(개인 비서 축):
+
+* `PersonalAssistantAgent -> NotionTasksReader -> Runtime Adapter -> Notion MCP`
+* Runtime Adapter는 구현 교체 가능:
+  * direct MCP client (Node 런타임이 직접 MCP 호출)
+  * GPT + MCP tool client (앱은 GPT API만 호출하고, 모델이 MCP tool을 사용)
+* 어떤 모드든 `Personal Tasks` 단일 databaseId 범위를 넘는 조회는 허용하지 않음
+
 ---
 
 ## 6. Agent Message Bus

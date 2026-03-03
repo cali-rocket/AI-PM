@@ -95,6 +95,39 @@ Asana 기반 프로젝트 추적, 마감일 관리, 리스크 감지, 운영 브
 * 시스템 경계 정의
 * 향후 구현을 위한 저장소 구조 정립
 
+## 환경 변수 (민감 정보)
+
+민감한 값(예: 실제 Notion Personal Tasks DB ID)은 코드에 하드코딩하지 않고 `.env`로 관리합니다.
+
+* 템플릿: `.env.example`
+* 로컬 파일: `.env` (git 커밋 금지)
+
+현재 사용 변수:
+
+* `PERSONAL_TASKS_DATABASE_ID`: 개인 비서 축에서 접근 허용된 Notion `Personal Tasks` 데이터베이스 ID
+* `PERSONAL_TASKS_READER_MODE`: `mock`(기본값) / `mcp`(Node에서 직접 MCP 호출) / `gpt_mcp`(GPT 모델이 MCP tool을 통해 조회)
+* `NOTION_MCP_URL` (선택): Notion MCP endpoint URL (기본값 `https://mcp.notion.com/mcp`)
+* `NOTION_MCP_ACCESS_TOKEN`: `mcp` 모드에서 사용할 Notion MCP OAuth access token (`gpt_mcp`에서는 모델 쪽 MCP 인증 방식에 따라 선택적으로 사용)
+* `OPENAI_API_KEY`: `gpt_mcp` 모드에서 사용할 OpenAI API 키
+* `OPENAI_MODEL`: `gpt_mcp` 모드에서 사용할 모델 ID (예: `gpt-5-mini`)
+* `OPENAI_BASE_URL` (선택): OpenAI API base URL (기본값 `https://api.openai.com/v1`)
+
+## 로컬 실행 (터미널 인터페이스)
+
+의존성 설치:
+
+* `npm install`
+
+대화형 오케스트레이터 실행:
+
+* `npm run chat:orchestrator`
+
+지원 명령:
+
+* `/help`
+* `/detail <notion_page_id>` (상세 조회)
+* `/exit`
+
 ## 문서 구성
 
 * `AGENTS.md`: 이 리포지토리에서 코딩 에이전트가 따라야 할 규칙

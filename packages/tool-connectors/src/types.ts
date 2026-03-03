@@ -49,6 +49,14 @@ export interface ToolConnectorRegistry {
 export type NotionTaskStatus = CoreNotionTaskStatus;
 
 /**
+ * Configuration for a Personal Tasks dedicated Notion reader.
+ * This value must point to a single allowed Personal Tasks database.
+ */
+export interface PersonalTasksReaderConfig {
+  personalTasksDatabaseId: string;
+}
+
+/**
  * One Notion DB row treated as one Notion page for a personal task.
  * Only the agreed MVP properties are represented.
  */
@@ -72,10 +80,9 @@ export interface NotionTaskPageBody {
 }
 
 /**
- * Read query for listing task rows from Notion DB.
+ * Read query for listing task rows from the configured Personal Tasks DB only.
  */
 export interface NotionTaskQuery {
-  notionDatabaseId: string;
   statuses?: NotionTaskStatus[];
   includeDone?: boolean;
   dueOnOrBefore?: string;

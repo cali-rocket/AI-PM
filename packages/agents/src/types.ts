@@ -14,6 +14,7 @@ import type { PersonalTaskSummaryRef, SharedMemoryStore } from "../../shared-mem
 
 export interface AgentRuntimeContext {
   notionTasksReader: NotionTasksReader;
+  personalTasksDatabaseId: string;
   sharedMemoryStore: SharedMemoryStore;
   now: string;
 }
@@ -28,7 +29,6 @@ export type PersonalAssistantIntent =
 export interface AgentExecutionInput {
   requestId: string;
   userId: string;
-  notionDatabaseId: string;
   intent: PersonalAssistantIntent;
   notionPageId?: string;
   daysAhead?: number;

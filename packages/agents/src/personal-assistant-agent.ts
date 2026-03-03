@@ -1,6 +1,6 @@
 /**
  * Responsibility: minimal Personal Assistant runtime stub (read-first).
- * Notion is the personal-task source-of-truth; shared memory refs are optional cache hints.
+ * Notion Personal Tasks DB is the source-of-truth; shared memory refs are optional cache hints.
  */
 
 import type { NotionTaskRecord } from "../../tool-connectors/src";
@@ -14,25 +14,10 @@ import type {
 
 export interface PersonalAssistantAgent {
   handleRequest(input: AgentExecutionInput, context: AgentRuntimeContext): Promise<AgentExecutionResult>;
-  listTasksByStatus(
-    notionDatabaseId: string,
-    status: TaskStatusFilter,
-    context: AgentRuntimeContext
-  ): Promise<PersonalAssistantQueryResult>;
-  listTasksDueSoon(
-    notionDatabaseId: string,
-    context: AgentRuntimeContext,
-    daysAhead?: number
-  ): Promise<PersonalAssistantQueryResult>;
-  getTaskDetail(
-    notionDatabaseId: string,
-    notionPageId: string,
-    context: AgentRuntimeContext
-  ): Promise<PersonalAssistantQueryResult>;
-  buildDailyTaskSummary(
-    notionDatabaseId: string,
-    context: AgentRuntimeContext
-  ): Promise<AgentExecutionResult>;
+  listTasksByStatus(status: TaskStatusFilter, context: AgentRuntimeContext): Promise<PersonalAssistantQueryResult>;
+  listTasksDueSoon(context: AgentRuntimeContext, daysAhead?: number): Promise<PersonalAssistantQueryResult>;
+  getTaskDetail(notionPageId: string, context: AgentRuntimeContext): Promise<PersonalAssistantQueryResult>;
+  buildDailyTaskSummary(context: AgentRuntimeContext): Promise<AgentExecutionResult>;
 }
 
 export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
@@ -40,28 +25,41 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
     input: AgentExecutionInput,
     context: AgentRuntimeContext
   ): Promise<AgentExecutionResult> {
+    if (!this.hasValidPersonalTasksScope(context)) {
+      return {
+        speaker: "personal_assistant",
+        summary:
+          "Personal Tasks reader scope mismatch: configured databaseId and runtime databaseId are different.",
+        usedSources: [],
+        confidence: "needs_review",
+        referencedNotionPageIds: [],
+        queryResult: {
+          tasks: [],
+          taskBody: null,
+          personalTaskSummaryRefs: [],
+        },
+        intent: input.intent,
+      };
+    }
+
     switch (input.intent) {
       case "list_in_progress": {
-        const result = await this.listTasksByStatus(input.notionDatabaseId, "in progress", context);
-        return this.buildListResult("진행 중인 개인 업무", input.intent, result);
+        const result = await this.listTasksByStatus("in progress", context);
+        return this.buildListResult("In-progress personal tasks (properties only)", input.intent, result);
       }
       case "list_not_started": {
-        const result = await this.listTasksByStatus(input.notionDatabaseId, "not started", context);
-        return this.buildListResult("아직 시작하지 않은 개인 업무", input.intent, result);
+        const result = await this.listTasksByStatus("not started", context);
+        return this.buildListResult("Not-started personal tasks (properties only)", input.intent, result);
       }
       case "list_with_due_date": {
-        const result = await this.listTasksDueSoon(
-          input.notionDatabaseId,
-          context,
-          input.daysAhead
-        );
-        return this.buildListResult("마감일이 있는 개인 업무", input.intent, result);
+        const result = await this.listTasksDueSoon(context, input.daysAhead);
+        return this.buildListResult("Personal tasks with due date (properties only)", input.intent, result);
       }
       case "get_task_detail": {
         if (!input.notionPageId) {
           return {
             speaker: "personal_assistant",
-            summary: "업무 상세를 조회하려면 notionPageId가 필요합니다.",
+            summary: "Task detail request requires notionPageId.",
             usedSources: [],
             confidence: "needs_review",
             referencedNotionPageIds: [],
@@ -74,20 +72,16 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
           };
         }
 
-        const result = await this.getTaskDetail(
-          input.notionDatabaseId,
-          input.notionPageId,
-          context
-        );
+        const result = await this.getTaskDetail(input.notionPageId, context);
         const title = result.tasks[0]?.title ?? input.notionPageId;
         const bodyPreview = this.previewBody(result.taskBody?.body);
-        const detailSummary = bodyPreview
-          ? `업무 상세 조회 완료: ${title} / 본문 미리보기: ${bodyPreview}`
-          : `업무 상세 조회 완료: ${title} / 본문 정보가 비어 있거나 확인되지 않았습니다.`;
+        const summary = bodyPreview
+          ? `Task detail loaded: ${title}. Body preview: ${bodyPreview}`
+          : `Task detail loaded: ${title}. Page body is empty or unavailable.`;
         const usedSources = this.buildUsedSources(result);
         return {
           speaker: "personal_assistant",
-          summary: detailSummary,
+          summary,
           usedSources,
           confidence: this.resolveDetailConfidence(result, usedSources),
           referencedNotionPageIds: this.collectPageIds(result.tasks),
@@ -97,23 +91,19 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
       }
       case "build_daily_summary":
       default:
-        return this.buildDailyTaskSummary(input.notionDatabaseId, context);
+        return this.buildDailyTaskSummary(context);
     }
   }
 
   async listTasksByStatus(
-    notionDatabaseId: string,
     status: TaskStatusFilter,
     context: AgentRuntimeContext
   ): Promise<PersonalAssistantQueryResult> {
-    // Source-of-truth read path: always query Notion first.
-    const tasks = await context.notionTasksReader.listTasks({
-      notionDatabaseId,
-      statuses: [status],
+    // List path reads DB properties only. Page body is not fetched.
+    const tasks = await context.notionTasksReader.listTasksByStatus(status, {
       includeDone: true,
     });
 
-    // shared memory is only used as fallback/reference when Notion has no direct match.
     const refs =
       tasks.length === 0
         ? (await context.sharedMemoryStore.listPersonalTaskSummaryRefs()).filter(
@@ -128,13 +118,11 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
   }
 
   async listTasksDueSoon(
-    notionDatabaseId: string,
     context: AgentRuntimeContext,
     daysAhead?: number
   ): Promise<PersonalAssistantQueryResult> {
-    // Read-first: base list from Notion, then lightweight date filtering.
+    // List path reads DB properties only. Page body is not fetched.
     const tasks = await context.notionTasksReader.listTasks({
-      notionDatabaseId,
       includeDone: false,
     });
 
@@ -178,14 +166,13 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
   }
 
   async getTaskDetail(
-    notionDatabaseId: string,
     notionPageId: string,
     context: AgentRuntimeContext
   ): Promise<PersonalAssistantQueryResult> {
-    // Source-of-truth read for row metadata and page body.
+    // Detail path reads row metadata first, then page body only for the target page.
     const task = await context.notionTasksReader.getTaskByPageId(notionPageId);
     const taskBody = await context.notionTasksReader.getTaskPageBody(notionPageId);
-    const tasks = task && task.notionDatabaseId === notionDatabaseId ? [task] : [];
+    const tasks = task ? [task] : [];
     const refs =
       tasks.length === 0
         ? (await context.sharedMemoryStore.listPersonalTaskSummaryRefs()).filter(
@@ -200,14 +187,11 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
     };
   }
 
-  async buildDailyTaskSummary(
-    notionDatabaseId: string,
-    context: AgentRuntimeContext
-  ): Promise<AgentExecutionResult> {
+  async buildDailyTaskSummary(context: AgentRuntimeContext): Promise<AgentExecutionResult> {
     const [inProgress, notStarted, dueTasks] = await Promise.all([
-      this.listTasksByStatus(notionDatabaseId, "in progress", context),
-      this.listTasksByStatus(notionDatabaseId, "not started", context),
-      this.listTasksDueSoon(notionDatabaseId, context),
+      this.listTasksByStatus("in progress", context),
+      this.listTasksByStatus("not started", context),
+      this.listTasksDueSoon(context),
     ]);
 
     const mergedTasks = this.uniqueTasks([
@@ -226,8 +210,8 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
 
     const summary =
       uniqueRefs.length > 0 && mergedTasks.length === 0
-        ? `오늘 개인 업무 요약: Notion 직접 조회 결과는 비어 있고, 캐시 참조 ${uniqueRefs.length}건이 있습니다.`
-        : `오늘 개인 업무 요약: 진행 중 ${inProgress.tasks.length}건, 미시작 ${notStarted.tasks.length}건, 마감일 있음 ${dueTasks.tasks.length}건.`;
+        ? `Daily personal task summary (properties only): Notion rows were empty and ${uniqueRefs.length} cache refs were used.`
+        : `Daily personal task summary (properties only): in-progress ${inProgress.tasks.length}, not-started ${notStarted.tasks.length}, with due date ${dueTasks.tasks.length}.`;
 
     return {
       speaker: "personal_assistant",
@@ -264,6 +248,10 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
     };
   }
 
+  private hasValidPersonalTasksScope(context: AgentRuntimeContext): boolean {
+    return context.notionTasksReader.personalTasksDatabaseId === context.personalTasksDatabaseId;
+  }
+
   private buildUsedSources(result: PersonalAssistantQueryResult): Array<"notion" | "shared_memory"> {
     if (result.personalTaskSummaryRefs.length > 0) {
       return ["notion", "shared_memory"];
@@ -275,7 +263,6 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
     result: PersonalAssistantQueryResult,
     usedSources: Array<"notion" | "shared_memory">
   ): "confirmed" | "likely" {
-    // Confirmed when based on direct Notion read only; likely when cache refs are mixed in.
     if (usedSources.includes("shared_memory") || result.personalTaskSummaryRefs.length > 0) {
       return "likely";
     }
@@ -303,9 +290,9 @@ export class MockPersonalAssistantAgent implements PersonalAssistantAgent {
       return `${title}: ${names.join(", ")}`;
     }
     if (refCount > 0) {
-      return `${title}: Notion 직접 조회 항목은 없고, 캐시 참조 ${refCount}건이 있습니다.`;
+      return `${title}: Notion rows were empty and ${refCount} cache refs were available.`;
     }
-    return `${title}: 조회된 항목이 없습니다.`;
+    return `${title}: no results.`;
   }
 
   private previewBody(body?: string): string | null {

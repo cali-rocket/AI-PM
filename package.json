@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "demo:orchestrator": "node apps/orchestrator/src/demo-runner.ts"
+    "demo:orchestrator": "tsx apps/orchestrator/src/demo-runner.ts",
+    "chat:orchestrator": "tsx apps/orchestrator/src/chat-runner.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "zod": "^4.3.6"
   }
 }

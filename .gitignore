@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# Local environment files (sensitive)
+.env
+.env.local
+.env.*.local
+
+# Keep example template
+!.env.example
