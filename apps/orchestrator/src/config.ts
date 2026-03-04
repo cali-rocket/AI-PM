@@ -5,16 +5,14 @@
 
 import { loadDotEnvFile, requireEnv } from "./env.ts";
 
-export type PersonalTasksReaderMode = "mock" | "mcp" | "gpt_mcp";
+export type PersonalTasksReaderMode = "mock" | "notion_api";
 
 export interface OrchestratorRuntimeConfig {
   personalTasksDatabaseId: string;
   personalTasksReaderMode: PersonalTasksReaderMode;
-  notionMcpUrl: string;
-  notionMcpAccessToken?: string;
-  openAiApiKey?: string;
-  openAiModel?: string;
-  openAiBaseUrl?: string;
+  notionInternalIntegrationSecret?: string;
+  notionApiBaseUrl: string;
+  notionApiVersion: string;
 }
 
 export function loadOrchestratorRuntimeConfig(): OrchestratorRuntimeConfig {
@@ -24,20 +22,19 @@ export function loadOrchestratorRuntimeConfig(): OrchestratorRuntimeConfig {
   const personalTasksReaderMode = resolveReaderMode(
     process.env.PERSONAL_TASKS_READER_MODE
   );
-  const notionMcpUrl = process.env.NOTION_MCP_URL?.trim() || "https://mcp.notion.com/mcp";
-  const notionMcpAccessToken = process.env.NOTION_MCP_ACCESS_TOKEN?.trim();
-  const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
-  const openAiModel = process.env.OPENAI_MODEL?.trim();
-  const openAiBaseUrl = process.env.OPENAI_BASE_URL?.trim();
+  const notionInternalIntegrationSecret =
+    process.env.NOTION_INTERNAL_INTEGRATION_SECRET?.trim();
+  const notionApiBaseUrl =
+    process.env.NOTION_API_BASE_URL?.trim() || "https://api.notion.com";
+  const notionApiVersion =
+    process.env.NOTION_API_VERSION?.trim() || "2022-06-28";
 
   return {
     personalTasksDatabaseId,
     personalTasksReaderMode,
-    notionMcpUrl,
-    notionMcpAccessToken,
-    openAiApiKey,
-    openAiModel,
-    openAiBaseUrl,
+    notionInternalIntegrationSecret,
+    notionApiBaseUrl,
+    notionApiVersion,
   };
 }
 
@@ -47,11 +44,15 @@ function resolveReaderMode(rawValue: string | undefined): PersonalTasksReaderMod
   }
 
   const normalized = rawValue.trim().toLowerCase();
-  if (normalized === "mock" || normalized === "mcp" || normalized === "gpt_mcp") {
+  if (normalized === "mock" || normalized === "notion_api") {
     return normalized;
+  }
+  if (normalized === "mcp") {
+    // Deprecated alias kept for migration safety.
+    return "notion_api";
   }
 
   throw new Error(
-    `Invalid PERSONAL_TASKS_READER_MODE="${rawValue}". Use "mock", "mcp", or "gpt_mcp".`
+    `Invalid PERSONAL_TASKS_READER_MODE="${rawValue}". Use "mock" or "notion_api" (legacy "mcp" is mapped to "notion_api").`
   );
 }

@@ -9,19 +9,16 @@ import { randomUUID } from "node:crypto";
 
 import { MockPersonalAssistantAgent } from "../../../packages/agents/src/personal-assistant-agent.ts";
 import { InMemorySharedMemoryStore } from "../../../packages/shared-memory/src/in-memory-store.ts";
-import { GptMcpNotionTasksReader } from "../../../packages/tool-connectors/src/gpt-mcp-notion-tasks-reader.ts";
-import { McpNotionTasksReader } from "../../../packages/tool-connectors/src/mcp-notion-tasks-reader.ts";
-import { MockNotionTasksReader } from "../../../packages/tool-connectors/src/mock-notion-tasks-reader.ts";
-import { OpenAiMcpPersonalTasksClient } from "../../../packages/tool-connectors/src/openai-mcp-personal-tasks-client.ts";
-import type { NotionTasksReader } from "../../../packages/tool-connectors/src/notion-tasks-reader.ts";
 import { loadOrchestratorRuntimeConfig } from "./config.ts";
 import { MockOrchestrator } from "./orchestrator.ts";
+import { createPersonalTasksReaderFromConfig } from "./personal-tasks-reader-factory.ts";
 import type { AuditLogger, OrchestrationContext, UserRequest, UserResponse } from "./types";
 
 const runtimeConfig = loadOrchestratorRuntimeConfig();
 
 async function runChat(): Promise<void> {
-  const notionTasksReader = await createPersonalTasksReader();
+  const readerSelection = await createPersonalTasksReaderFromConfig(runtimeConfig);
+  const notionTasksReader = readerSelection.reader;
   const sharedMemoryStore = new InMemorySharedMemoryStore({ seed: true });
   const personalAssistantAgent = new MockPersonalAssistantAgent();
   const orchestrator = new MockOrchestrator();
@@ -51,7 +48,9 @@ async function runChat(): Promise<void> {
 
   console.log("=== PM Desk AI Chat Runner ===");
   console.log(
-    `[config] readerMode=${runtimeConfig.personalTasksReaderMode} databaseId=${runtimeConfig.personalTasksDatabaseId}`
+    `[config] requestedReaderMode=${runtimeConfig.personalTasksReaderMode} selectedReaderMode=${readerSelection.selectedMode} personalTasksDatabaseConfigured=${Boolean(
+      runtimeConfig.personalTasksDatabaseId
+    )}`
   );
   console.log("Type your message and press Enter.");
   console.log("Commands: /help, /exit, /detail <page_id>");
@@ -136,69 +135,6 @@ function buildRequest(input: {
     requestedAt,
     target: "desk",
   };
-}
-
-async function createPersonalTasksReader(): Promise<NotionTasksReader> {
-  if (runtimeConfig.personalTasksReaderMode === "gpt_mcp") {
-    try {
-      const llmClient = new OpenAiMcpPersonalTasksClient({
-        apiKey: runtimeConfig.openAiApiKey ?? "",
-        model: runtimeConfig.openAiModel ?? "",
-        baseUrl: runtimeConfig.openAiBaseUrl,
-        notionMcpServerUrl: runtimeConfig.notionMcpUrl,
-        notionMcpAccessToken: runtimeConfig.notionMcpAccessToken,
-      });
-      const gptReader = new GptMcpNotionTasksReader(
-        {
-          personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
-        },
-        {
-          llmMcpClient: llmClient,
-        }
-      );
-
-      await gptReader.listTasks({ limit: 1 });
-      console.log("[config] using gpt-mcp-notion-tasks-reader");
-      return gptReader;
-    } catch (error) {
-      console.warn(
-        `[config] GPT MCP reader init failed; fallback to mock reader: ${
-          (error as Error).message
-        }`
-      );
-    }
-  }
-
-  if (runtimeConfig.personalTasksReaderMode === "mcp") {
-    try {
-      const mcpReader = new McpNotionTasksReader(
-        {
-          personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
-        },
-        {
-          mcpClientConfig: {
-            serverUrl: runtimeConfig.notionMcpUrl,
-            accessToken: runtimeConfig.notionMcpAccessToken ?? "",
-          },
-        }
-      );
-
-      await mcpReader.listTasks({ limit: 1 });
-      console.log("[config] using mcp-notion-tasks-reader");
-      return mcpReader;
-    } catch (error) {
-      console.warn(
-        `[config] MCP reader init failed; fallback to mock reader: ${
-          (error as Error).message
-        }`
-      );
-    }
-  }
-
-  console.log("[config] using mock-notion-tasks-reader");
-  return new MockNotionTasksReader({
-    personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
-  });
 }
 
 function createAuditLogger(): AuditLogger {

@@ -4,11 +4,13 @@
  *
  * Runtime assumptions:
  * - The process can reach Notion MCP server over HTTPS.
- * - OAuth access token for Notion MCP is provided by env/config.
+ * - Authentication is handled by the MCP client/OAuth session outside app business logic.
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { NotionMcpAuthSessionManager } from "./notion-mcp-auth-session";
+import { NotionMcpOAuthLoginRequiredError } from "./notion-mcp-auth-session";
 
 export interface PersonalTasksSchemaColumns {
   title: string;
@@ -50,7 +52,8 @@ export interface PersonalTasksMcpBridgeClient {
 
 export interface NotionMcpClientConfig {
   serverUrl: string;
-  accessToken: string;
+  accessToken?: string;
+  authSessionManager?: NotionMcpAuthSessionManager;
   timeoutMs?: number;
 }
 
@@ -65,6 +68,7 @@ interface ResolvedToolNames {
 export class NotionMcpRuntimeBridgeClient implements PersonalTasksMcpBridgeClient {
   private readonly config: NotionMcpClientConfig;
   private readonly timeoutMs: number;
+  private readonly authSessionManager?: NotionMcpAuthSessionManager;
 
   private client?: Client;
   private transport?: StreamableHTTPClientTransport;
@@ -72,37 +76,55 @@ export class NotionMcpRuntimeBridgeClient implements PersonalTasksMcpBridgeClien
 
   constructor(config: NotionMcpClientConfig) {
     const serverUrl = config.serverUrl?.trim();
-    const accessToken = config.accessToken?.trim();
     if (!serverUrl) {
       throw new Error("Notion MCP serverUrl is required.");
-    }
-    if (!accessToken) {
-      throw new Error("Notion MCP accessToken is required.");
     }
 
     this.config = {
       serverUrl,
-      accessToken,
+      accessToken: config.accessToken?.trim(),
+      authSessionManager: config.authSessionManager,
       timeoutMs: config.timeoutMs,
     };
     this.timeoutMs = config.timeoutMs ?? 45_000;
+    this.authSessionManager = config.authSessionManager;
   }
 
   async getDataSourceInfo(databaseId: string): Promise<PersonalTasksDataSourceInfo> {
     const fetchTool = await this.resolveToolName("fetch");
-    const result = await this.callTool(fetchTool, { id: databaseId });
-    const payload = extractJsonBlobFromToolResult(result);
+    const databaseResult = await this.callTool(fetchTool, { id: databaseId });
+    const databasePayload = extractJsonBlobFromToolResult(databaseResult);
+    const databaseText = asString(databasePayload.text) ?? "";
 
-    const embeddedText = asString(payload.text) ?? "";
-    const stateObject = extractDataSourceStateObject(embeddedText);
-    if (!stateObject) {
-      throw new Error("Failed to parse data source state from notion-fetch response.");
+    let stateObject = extractDataSourceStateObject(databaseText);
+    let dataSourceUrl =
+      asString(stateObject?.url) ?? extractFirstDataSourceUrl(databaseText);
+
+    // MCP responses can differ by deployment/version:
+    // - database fetch may include only data-source references
+    // - data-source fetch usually includes full schema state
+    if ((!stateObject || !asRecord(stateObject.schema)) && dataSourceUrl) {
+      const dataSourceResult = await this.callTool(fetchTool, { id: dataSourceUrl });
+      const dataSourcePayload = extractJsonBlobFromToolResult(dataSourceResult);
+      const dataSourceText = asString(dataSourcePayload.text) ?? "";
+      stateObject = extractDataSourceStateObject(dataSourceText) ?? stateObject;
+      dataSourceUrl =
+        asString(stateObject?.url) ??
+        extractFirstDataSourceUrl(dataSourceText) ??
+        dataSourceUrl;
     }
 
-    const dataSourceUrl = asString(stateObject.url);
+    if (!stateObject) {
+      throw new Error(
+        "Failed to parse data source state from notion-fetch response. Verify MCP fetch payload tags."
+      );
+    }
+
     const schema = asRecord(stateObject.schema);
     if (!dataSourceUrl || !schema) {
-      throw new Error("Missing data source url/schema in notion-fetch response.");
+      throw new Error(
+        "Missing data source url/schema in notion-fetch response. Verify database -> data source resolution."
+      );
     }
 
     const schemaColumns = resolveSchemaColumns(schema);
@@ -173,6 +195,7 @@ export class NotionMcpRuntimeBridgeClient implements PersonalTasksMcpBridgeClien
     if (this.client) {
       return this.client;
     }
+    const accessToken = await this.resolveAccessToken();
 
     this.client = new Client(
       { name: "ai-pm-notion-runtime-client", version: "0.1.0" },
@@ -182,19 +205,19 @@ export class NotionMcpRuntimeBridgeClient implements PersonalTasksMcpBridgeClien
     this.transport = new StreamableHTTPClientTransport(
       new URL(this.config.serverUrl),
       {
-        requestInit: {
-          headers: {
-            Authorization: `Bearer ${this.config.accessToken}`,
-          },
-        },
+        requestInit: buildRequestInit(accessToken),
       }
     );
 
-    await withTimeout(
-      this.client.connect(this.transport),
-      this.timeoutMs,
-      "Timed out while connecting to Notion MCP server."
-    );
+    try {
+      await withTimeout(
+        this.client.connect(this.transport),
+        this.timeoutMs,
+        "Timed out while connecting to Notion MCP server."
+      );
+    } catch (error) {
+      throw convertToAuthErrorIfNeeded(error);
+    }
 
     return this.client;
   }
@@ -205,11 +228,16 @@ export class NotionMcpRuntimeBridgeClient implements PersonalTasksMcpBridgeClien
     }
 
     const client = await this.getClient();
-    const toolsResult = await withTimeout(
-      client.listTools(),
-      this.timeoutMs,
-      "Timed out while listing Notion MCP tools."
-    );
+    let toolsResult: Awaited<ReturnType<Client["listTools"]>>;
+    try {
+      toolsResult = await withTimeout(
+        client.listTools(),
+        this.timeoutMs,
+        "Timed out while listing Notion MCP tools."
+      );
+    } catch (error) {
+      throw convertToAuthErrorIfNeeded(error);
+    }
     const tools = toolsResult.tools ?? [];
 
     const fetch = findToolName(tools, ["notion-fetch", "notion.fetch"]);
@@ -233,20 +261,55 @@ export class NotionMcpRuntimeBridgeClient implements PersonalTasksMcpBridgeClien
     args: Record<string, unknown>
   ): Promise<unknown> {
     const client = await this.getClient();
-    const result = await withTimeout(
-      client.callTool({
-        name: toolName,
-        arguments: args,
-      }),
-      this.timeoutMs,
-      `Timed out while calling MCP tool: ${toolName}`
-    );
+    let result: Awaited<ReturnType<Client["callTool"]>>;
+    try {
+      result = await withTimeout(
+        client.callTool({
+          name: toolName,
+          arguments: args,
+        }),
+        this.timeoutMs,
+        `Timed out while calling MCP tool: ${toolName}`
+      );
+    } catch (error) {
+      throw convertToAuthErrorIfNeeded(error);
+    }
 
     if (result.isError) {
       throw new Error(`MCP tool error from ${toolName}.`);
     }
     return result;
   }
+
+  private async resolveAccessToken(): Promise<string> {
+    if (this.config.accessToken) {
+      return this.config.accessToken;
+    }
+    if (!this.authSessionManager) {
+      throw new NotionMcpOAuthLoginRequiredError(
+        "OAuth login required: Notion MCP auth session manager is not configured."
+      );
+    }
+
+    const session = await this.authSessionManager.getValidSession();
+    const token = session.accessToken?.trim();
+    if (!token) {
+      throw new NotionMcpOAuthLoginRequiredError(
+        "OAuth login required: session exists but access token is empty."
+      );
+    }
+    return token;
+  }
+}
+
+function buildRequestInit(
+  accessToken: string
+): { headers: Record<string, string> } {
+  return {
+    headers: {
+      Authorization: `Bearer ${accessToken.trim()}`,
+    },
+  };
 }
 
 function buildTaskSelectSql(
@@ -394,16 +457,19 @@ function extractTagContent(sourceText: string, tagName: string): string | null {
   return matched?.[1] ?? null;
 }
 
+function extractFirstDataSourceUrl(sourceText: string): string | null {
+  const match = sourceText.match(
+    /<data-source\s+url="(collection:\/\/[a-f0-9-]+)"/i
+  );
+  return match?.[1] ?? null;
+}
+
 function pickLastEditedAt(properties: Record<string, unknown> | null): string | null {
   if (!properties) {
     return null;
   }
 
-  const directCandidates = [
-    "마지막 수정일",
-    "last_edited_time",
-    "lastEditedAt",
-  ];
+  const directCandidates = ["last_edited_time", "lastEditedAt", "Last edited time"];
   for (const key of directCandidates) {
     const value = asNullableString(properties[key]);
     if (value) {
@@ -452,6 +518,29 @@ function asNullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function convertToAuthErrorIfNeeded(error: unknown): Error {
+  if (error instanceof NotionMcpOAuthLoginRequiredError) {
+    return error;
+  }
+
+  const message = (error as Error)?.message ?? String(error);
+  const normalized = message.toLowerCase();
+  const isAuthFailure =
+    normalized.includes("401") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("invalid_token") ||
+    normalized.includes("invalid token") ||
+    normalized.includes("authentication");
+
+  if (isAuthFailure) {
+    return new NotionMcpOAuthLoginRequiredError(
+      `OAuth login required or session expired: ${message}`
+    );
+  }
+
+  return error instanceof Error ? error : new Error(message);
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -473,3 +562,4 @@ async function withTimeout<T>(
     }
   }
 }
+

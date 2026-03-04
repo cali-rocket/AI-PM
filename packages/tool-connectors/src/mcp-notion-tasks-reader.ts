@@ -10,6 +10,12 @@
  * - Status is mapped from source label into: not started | in progress | done.
  * - createdAt / lastEditedAt are always present for valid rows.
  * - Page body can be reduced to one plain-text string from MCP fetch output.
+ *
+ * Local smoke path:
+ * - Set PERSONAL_TASKS_READER_MODE=mcp
+ * - Ensure MCP client OAuth session is already authenticated
+ * - Run `npm run demo:orchestrator` or `npm run chat:orchestrator`
+ * - Confirm log: "[notion-reader] mode=mcp, attempting real MCP reader"
  */
 
 import type { NotionTasksReader } from "./notion-tasks-reader";
@@ -21,6 +27,10 @@ import type {
   PersonalTasksReaderConfig,
 } from "./types";
 import {
+  createNotionMcpAuthSessionManagerFromEnv,
+  type NotionMcpAuthSessionManager,
+} from "./notion-mcp-auth-session";
+import {
   NotionMcpRuntimeBridgeClient,
   type NotionMcpClientConfig,
   type PersonalTasksDataSourceInfo,
@@ -31,6 +41,7 @@ import {
 interface McpNotionTasksReaderOptions {
   mcpBridgeClient?: PersonalTasksMcpBridgeClient;
   mcpClientConfig?: NotionMcpClientConfig;
+  authSessionManager?: NotionMcpAuthSessionManager;
 }
 
 export class McpNotionTasksReader implements NotionTasksReader {
@@ -49,14 +60,22 @@ export class McpNotionTasksReader implements NotionTasksReader {
     }
 
     this.personalTasksDatabaseId = databaseId;
+    const authSessionManager =
+      options?.authSessionManager ?? createNotionMcpAuthSessionManagerFromEnv() ?? undefined;
+    const mcpClientConfig: NotionMcpClientConfig = {
+      serverUrl:
+        options?.mcpClientConfig?.serverUrl?.trim() ??
+        process.env.NOTION_MCP_URL?.trim() ??
+        "https://mcp.notion.com/mcp",
+      accessToken: options?.mcpClientConfig?.accessToken,
+      authSessionManager:
+        options?.mcpClientConfig?.authSessionManager ?? authSessionManager,
+      timeoutMs: options?.mcpClientConfig?.timeoutMs,
+    };
+
     this.mcpBridgeClient =
       options?.mcpBridgeClient ??
-      new NotionMcpRuntimeBridgeClient(
-        options?.mcpClientConfig ?? {
-          serverUrl: process.env.NOTION_MCP_URL?.trim() ?? "https://mcp.notion.com/mcp",
-          accessToken: process.env.NOTION_MCP_ACCESS_TOKEN?.trim() ?? "",
-        }
-      );
+      new NotionMcpRuntimeBridgeClient(mcpClientConfig);
   }
 
   async listTasks(query: NotionTaskQuery): Promise<NotionTaskRecord[]> {

@@ -1,17 +1,13 @@
 /**
  * Responsibility: minimal local demo runner for orchestrator -> Personal Assistant flow.
- * Supports mock and real MCP reader selection while keeping one-final-speaker flow unchanged.
+ * Supports mock and Notion REST API reader selection while keeping one-final-speaker flow unchanged.
  */
 
 import { MockPersonalAssistantAgent } from "../../../packages/agents/src/personal-assistant-agent.ts";
 import { InMemorySharedMemoryStore } from "../../../packages/shared-memory/src/in-memory-store.ts";
-import { GptMcpNotionTasksReader } from "../../../packages/tool-connectors/src/gpt-mcp-notion-tasks-reader.ts";
-import { McpNotionTasksReader } from "../../../packages/tool-connectors/src/mcp-notion-tasks-reader.ts";
-import { MockNotionTasksReader } from "../../../packages/tool-connectors/src/mock-notion-tasks-reader.ts";
-import { OpenAiMcpPersonalTasksClient } from "../../../packages/tool-connectors/src/openai-mcp-personal-tasks-client.ts";
-import type { NotionTasksReader } from "../../../packages/tool-connectors/src/notion-tasks-reader.ts";
 import { loadOrchestratorRuntimeConfig } from "./config.ts";
 import { MockOrchestrator } from "./orchestrator.ts";
+import { createPersonalTasksReaderFromConfig } from "./personal-tasks-reader-factory.ts";
 import type { AuditLogger, OrchestrationContext, UserRequest } from "./types";
 
 const runtimeConfig = loadOrchestratorRuntimeConfig();
@@ -57,7 +53,8 @@ const auditLogger: AuditLogger = {
 };
 
 async function runDemo(): Promise<void> {
-  const notionTasksReader = await createPersonalTasksReader();
+  const readerSelection = await createPersonalTasksReaderFromConfig(runtimeConfig);
+  const notionTasksReader = readerSelection.reader;
   const sharedMemoryStore = new InMemorySharedMemoryStore({ seed: true });
   const personalAssistantAgent = new MockPersonalAssistantAgent();
   const orchestrator = new MockOrchestrator();
@@ -85,7 +82,9 @@ async function runDemo(): Promise<void> {
 
   console.log("=== PM Desk AI Demo Runner (Minimal E2E) ===");
   console.log(
-    `[config] personalTasksReaderMode=${runtimeConfig.personalTasksReaderMode} databaseId=${runtimeConfig.personalTasksDatabaseId}`
+    `[config] requestedReaderMode=${runtimeConfig.personalTasksReaderMode} selectedReaderMode=${readerSelection.selectedMode} personalTasksDatabaseConfigured=${Boolean(
+      runtimeConfig.personalTasksDatabaseId
+    )}`
   );
   for (const request of demoRequests) {
     const response = await orchestrator.handleUserRequest(request, context);
@@ -110,67 +109,3 @@ runDemo().catch((error: unknown) => {
   console.error("[demo-runner] failed:", error);
   process.exitCode = 1;
 });
-
-async function createPersonalTasksReader(): Promise<NotionTasksReader> {
-  if (runtimeConfig.personalTasksReaderMode === "gpt_mcp") {
-    try {
-      const llmClient = new OpenAiMcpPersonalTasksClient({
-        apiKey: runtimeConfig.openAiApiKey ?? "",
-        model: runtimeConfig.openAiModel ?? "",
-        baseUrl: runtimeConfig.openAiBaseUrl,
-        notionMcpServerUrl: runtimeConfig.notionMcpUrl,
-        notionMcpAccessToken: runtimeConfig.notionMcpAccessToken,
-      });
-      const gptReader = new GptMcpNotionTasksReader(
-        {
-          personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
-        },
-        {
-          llmMcpClient: llmClient,
-        }
-      );
-
-      await gptReader.listTasks({ limit: 1 });
-      console.log("[config] using gpt-mcp-notion-tasks-reader");
-      return gptReader;
-    } catch (error) {
-      console.warn(
-        `[config] GPT MCP reader initialization failed, falling back to mock reader: ${
-          (error as Error).message
-        }`
-      );
-    }
-  }
-
-  if (runtimeConfig.personalTasksReaderMode === "mcp") {
-    try {
-      const mcpReader = new McpNotionTasksReader(
-        {
-          personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
-        },
-        {
-          mcpClientConfig: {
-            serverUrl: runtimeConfig.notionMcpUrl,
-            accessToken: runtimeConfig.notionMcpAccessToken ?? "",
-          },
-        }
-      );
-
-      // Smoke-check MCP availability. If it fails, fallback to mock path.
-      await mcpReader.listTasks({ limit: 1 });
-      console.log("[config] using mcp-notion-tasks-reader");
-      return mcpReader;
-    } catch (error) {
-      console.warn(
-        `[config] MCP reader initialization failed, falling back to mock reader: ${
-          (error as Error).message
-        }`
-      );
-    }
-  }
-
-  console.log("[config] using mock-notion-tasks-reader");
-  return new MockNotionTasksReader({
-    personalTasksDatabaseId: runtimeConfig.personalTasksDatabaseId,
-  });
-}

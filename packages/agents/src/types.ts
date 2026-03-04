@@ -24,11 +24,15 @@ export type PersonalAssistantIntent =
   | "list_not_started"
   | "list_with_due_date"
   | "get_task_detail"
-  | "build_daily_summary";
+  | "build_daily_summary"
+  | "conversational_follow_up"
+  | "needs_clarification"
+  | "approval_pending";
 
 export interface AgentExecutionInput {
   requestId: string;
   userId: string;
+  conversationId?: string;
   intent: PersonalAssistantIntent;
   notionPageId?: string;
   daysAhead?: number;

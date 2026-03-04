@@ -4,12 +4,14 @@
   "type": "module",
   "scripts": {
     "demo:orchestrator": "tsx apps/orchestrator/src/demo-runner.ts",
-    "chat:orchestrator": "tsx apps/orchestrator/src/chat-runner.ts"
+    "chat:orchestrator": "tsx apps/orchestrator/src/chat-runner.ts",
+    "diagnose:personal-tasks": "tsx apps/orchestrator/src/diagnose-personal-tasks.ts"
   },
   "devDependencies": {
     "tsx": "^4.20.5"
   },
   "dependencies": {
+    "@notionhq/client": "^2.2.16",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "zod": "^4.3.6"
   }

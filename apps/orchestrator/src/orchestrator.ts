@@ -67,6 +67,7 @@ export class MockOrchestrator implements Orchestrator {
             {
               requestId: request.id,
               userId: request.userId,
+              conversationId: request.conversationId,
               intent: this.resolvePersonalAssistantIntent(request),
               notionPageId: this.tryGetNotionPageId(request.context),
               userText: request.text,

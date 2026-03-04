@@ -105,12 +105,13 @@ Asana 기반 프로젝트 추적, 마감일 관리, 리스크 감지, 운영 브
 현재 사용 변수:
 
 * `PERSONAL_TASKS_DATABASE_ID`: 개인 비서 축에서 접근 허용된 Notion `Personal Tasks` 데이터베이스 ID
-* `PERSONAL_TASKS_READER_MODE`: `mock`(기본값) / `mcp`(Node에서 직접 MCP 호출) / `gpt_mcp`(GPT 모델이 MCP tool을 통해 조회)
-* `NOTION_MCP_URL` (선택): Notion MCP endpoint URL (기본값 `https://mcp.notion.com/mcp`)
-* `NOTION_MCP_ACCESS_TOKEN`: `mcp` 모드에서 사용할 Notion MCP OAuth access token (`gpt_mcp`에서는 모델 쪽 MCP 인증 방식에 따라 선택적으로 사용)
-* `OPENAI_API_KEY`: `gpt_mcp` 모드에서 사용할 OpenAI API 키
-* `OPENAI_MODEL`: `gpt_mcp` 모드에서 사용할 모델 ID (예: `gpt-5-mini`)
-* `OPENAI_BASE_URL` (선택): OpenAI API base URL (기본값 `https://api.openai.com/v1`)
+* `PERSONAL_TASKS_READER_MODE`: `mock`(기본값) / `notion_api`(Notion REST API 호출)
+* `NOTION_INTERNAL_INTEGRATION_SECRET`: Notion internal integration secret (read-only 조회용)
+* `NOTION_API_BASE_URL` (선택): 기본값 `https://api.notion.com`
+* `NOTION_API_VERSION` (선택): 기본값 `2022-06-28`
+
+Personal Tasks reader는 OAuth/MCP 세션이 아니라 internal integration secret 기반으로 동작합니다.  
+앱은 `PERSONAL_TASKS_DATABASE_ID` 기반으로 `Personal Tasks` 범위 제한과 read-only 접근만 담당합니다.
 
 ## 로컬 실행 (터미널 인터페이스)
 
